@@ -481,6 +481,18 @@ def main():
     # Apply CLI arguments to config (higher priority - overrides plugin settings)
     final_config = apply_args_to_config(base_config, args)
 
+    if "moonlight_16b" in args.recipe_name:
+        pp_size = final_config.model.pipeline_model_parallel_size
+        vpp_size = final_config.model.virtual_pipeline_model_parallel_size or 1
+        final_config.model.pipeline_model_parallel_layout = {
+            (1, 1): None,
+            (2, 1): [["embedding"] + ["decoder"] * 14, ["decoder"] * 13 + ["loss"]],
+            (4, 1): [["embedding"] + ["decoder"] * 7] + [["decoder"] * 7] * 2 + [["decoder"] * 6 + ["loss"]],
+            (8, 1): [["embedding"] + ["decoder"] * 4] + [["decoder"] * 4] * 6 + [["decoder"] * 3 + ["loss"]],
+            (2, 2): [["embedding"] + ["decoder"] * 7] + [["decoder"] * 7] * 2 + [["decoder"] * 6 + ["loss"]],
+            (4, 2): [["embedding"] + ["decoder"] * 4] + [["decoder"] * 4] * 6 + [["decoder"] * 3 + ["loss"]],
+        }[pp_size, vpp_size]
+
     # Log final configuration
     if get_rank_safe() == 0:
         logging.info("Final configuration:")
