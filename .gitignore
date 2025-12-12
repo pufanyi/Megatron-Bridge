@@ -186,3 +186,5 @@ slurm*.out
 .uv/
 
 checkpoints/
+outputs/
+aoss/
