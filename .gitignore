@@ -184,3 +184,5 @@ slurm*.out
 
 # UV package manager
 .uv/
+
+checkpoints/
