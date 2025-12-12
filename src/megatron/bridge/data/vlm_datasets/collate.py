@@ -17,6 +17,8 @@ Collation utilities for building VLM training batches from conversation examples
 """
 
 import warnings
+import io
+import os
 
 import torch
 import torch.nn.functional as F
@@ -25,6 +27,52 @@ from PIL import Image  # noqa: F401  # may be used downstream by processors
 from megatron.bridge.data.datasets.utils import IGNORE_INDEX
 from megatron.bridge.data.vlm_datasets.token_utils import extract_skipped_token_ids
 from megatron.bridge.training.utils.visual_inputs import Qwen2_5_VLVisualInputs
+from megatron.bridge.data.vlm_datasets.aoss.storage_clients import PatternAOSSClient
+
+# Initialize AOSS Client (singleton-like or global instance for the worker)
+# Note: You might need to configure this with actual config paths or rules
+# This is a basic setup assuming default config or environment variables work.
+# Adjust pattern_rules as needed for your specific aoss paths.
+_AOSS_CLIENT = None
+
+def _get_aoss_client():
+    global _AOSS_CLIENT
+    if _AOSS_CLIENT is None:
+        try:
+            # Example configuration - replace with actual config paths if needed
+            _AOSS_CLIENT = PatternAOSSClient(
+                default_conf_path=os.getenv("AOSS_DEFAULT_CONF", None),
+                pattern_rules=[] # Add specific rules if needed, e.g. [(r"^aoss://my-container", "/path/to/conf")]
+            )
+        except ImportError:
+            # Fallback or handle if AOSS SDK is missing but this code path is hit
+            warnings.warn("PatternAOSSClient could not be initialized. AOSS downloads will fail.")
+    return _AOSS_CLIENT
+
+def _resolve_aoss_image(image_path_or_obj):
+    """
+    Check image path, if it matches AOSS pattern, download it.
+    Returns: PIL.Image object or original path
+    """
+    if not isinstance(image_path_or_obj, str):
+        return image_path_or_obj
+
+    # Check for aoss/OSS prefixes
+    if image_path_or_obj.startswith("s3://") or image_path_or_obj.startswith("oss://") or image_path_or_obj.startswith("aoss://"): # Adjust prefixes as needed
+        client = _get_aoss_client()
+        if client:
+            try:
+                # Assuming 'get' returns bytes. Adjust based on actual AOSSClient API.
+                # The provided storage_clients.py wrapper has a 'get' method.
+                image_bytes = client.get(image_path_or_obj)
+                if image_bytes:
+                    return Image.open(io.BytesIO(image_bytes))
+            except Exception as e:
+                warnings.warn(f"Failed to download image from {image_path_or_obj}: {e}")
+                # You might want to return None or raise, depending on desired behavior
+                return None
+    
+    return image_path_or_obj
 
 
 # Local message used when optional qwen_vl_utils dependency is missing
@@ -166,6 +214,15 @@ def qwen2_5_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
     per_example_images = []
     has_images = []
     for example in examples:
+        # === AOSS Integration: Resolve image paths before processing ===
+        for msg in example["conversation"]:
+            if "content" in msg and isinstance(msg["content"], list):
+                for content in msg["content"]:
+                    if isinstance(content, dict) and content.get("type") == "image":
+                        # Replace image path with PIL object or local path if needed
+                        content["image"] = _resolve_aoss_image(content["image"])
+        # ============================================================
+
         imgs = process_vision_info(example["conversation"])[0]
         if imgs is None:
             imgs = []
