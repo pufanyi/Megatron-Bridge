@@ -20,9 +20,11 @@ from typing_extensions import TypedDict, Unpack
 
 from megatron.bridge import AutoBridge
 from megatron.bridge.data.vlm_datasets import (
+    AOSSConfig,
     HFDatasetConversationProvider,
     MockVLMConversationProvider,
     PreloadedVLMConversationProvider,
+    SensetimeDatasetProvider,
 )
 from megatron.bridge.recipes.utils.optimizer_utils import distributed_fused_adam_with_cosine_annealing
 from megatron.bridge.recipes.utils.tokenizer_utils import DEFAULT_NULL_TOKENIZER_VOCAB_SIZE
@@ -54,6 +56,7 @@ class Qwen3VLCommonKwargs(TypedDict, total=False):
     dataset_type: Optional[str]
     image_folder: Optional[str]
     tokenizer_model: Optional[str]
+    aoss_config: Optional[AOSSConfig]
     # Model configuration
     tensor_parallelism: int
     pipeline_parallelism: int
@@ -143,6 +146,7 @@ def _qwen3_vl_common(
     dataset_type: Optional[str] = None,
     image_folder: Optional[str] = None,
     tokenizer_model: Optional[str] = None,
+    aoss_config: Optional[AOSSConfig] = None,
     # Model configuration
     tensor_parallelism: int = 2,
     pipeline_parallelism: int = 1,
@@ -252,8 +256,22 @@ def _qwen3_vl_common(
             pin_memory=True,
             persistent_workers=False,
         )
+    elif _dataset_choice == "sensetime":
+        dataset_cfg = SensetimeDatasetProvider(
+            sequence_length=seq_length,
+            hf_processor_path=_processor_model,
+            num_workers=2,
+            dataloader_type="single",
+            data_sharding=True,
+            pin_memory=True,
+            persistent_workers=False,
+            meta_json_path=train_data_path[0] if isinstance(train_data_path, list) else train_data_path,
+            aoss_config=aoss_config,
+        )
     else:
-        raise ValueError(f"Unsupported dataset_type '{_dataset_choice}'. Expected one of ['mock', 'preloaded', 'hf'].")
+        raise ValueError(
+            f"Unsupported dataset_type '{_dataset_choice}'. Expected one of ['mock', 'preloaded', 'hf', 'sensetime']."
+        )
 
     cfg = ConfigContainer(
         model=model_cfg,

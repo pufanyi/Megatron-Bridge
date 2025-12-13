@@ -30,17 +30,24 @@ from megatron.bridge.training.config import DatasetBuildContext, DatasetProvider
 
 
 def _split_text_by_placeholders(
-    text: str, image_paths: List[str], video_paths: Optional[List[str]] = None
+    text: str, image_paths: List[str], video_paths: Optional[List[str]] = None, skip_video: bool = True
 ) -> List[Dict[str, Any]]:
     """
     Split legacy text containing "<image>"/"<video>" markers into an alternating
     sequence of text and media parts, preserving the original order and spacing.
+
+    Args:
+        text: The text containing placeholders
+        image_paths: List of image paths to substitute for <image> markers
+        video_paths: List of video paths to substitute for <video> markers
+        skip_video: If True, skip <video> markers entirely (default True for Qwen VL compatibility)
     """
     parts: List[Dict[str, Any]] = []
     img_idx = 0
     vid_idx = 0
 
     last_end = 0
+    assert "<video>" not in text, "video is not supported yet"
     for match in re.finditer(r"<image>|<video>", text):
         # Preceding text (if any)
         if match.start() > last_end:
@@ -56,11 +63,15 @@ def _split_text_by_placeholders(
                 parts.append({"type": "image", "image": image_paths[img_idx]})
             img_idx += 1
         else:  # <video>
-            if video_paths is None or vid_idx >= len(video_paths):
-                logging.warning("Encountered <video> without corresponding entry in videos list.")
+            if skip_video:
+                # Skip video placeholders for models that don't support video
+                vid_idx += 1
             else:
-                parts.append({"type": "video", "video": video_paths[vid_idx]})
-            vid_idx += 1
+                if video_paths is None or vid_idx >= len(video_paths):
+                    logging.warning("Encountered <video> without corresponding entry in videos list.")
+                else:
+                    parts.append({"type": "video", "video": video_paths[vid_idx]})
+                vid_idx += 1
         last_end = match.end()
 
     # Trailing text (if any)
@@ -71,6 +82,25 @@ def _split_text_by_placeholders(
     return parts
 
 
+def _is_url_path(path: str) -> bool:
+    """Check if a path is a URL-style path that shouldn't be normalized with os.path."""
+    url_prefixes = ("http://", "https://", "s3://", "oss://", "aoss://", "file://", "gs://")
+    return any(path.startswith(prefix) for prefix in url_prefixes)
+
+
+def _join_paths(base: str, relative: str) -> str:
+    """Join paths, handling URL-style paths correctly without breaking double slashes."""
+    if _is_url_path(base):
+        # For URL paths, use simple string concatenation to preserve the scheme
+        # Ensure base ends with '/' and relative doesn't start with '/'
+        base = base.rstrip("/") + "/"
+        relative = relative.lstrip("/")
+        return base + relative
+    else:
+        # For local paths, use os.path.normpath for proper normalization
+        return os.path.normpath(os.path.join(base, relative))
+
+
 def _normalize_paths(paths: Optional[List[Any]], base_folder: Optional[str]) -> Optional[List[Any]]:
     if not paths or base_folder is None:
         return paths
@@ -79,10 +109,11 @@ def _normalize_paths(paths: Optional[List[Any]], base_folder: Optional[str]) -> 
         if not isinstance(p, str):
             normalized.append(p)
             continue
-        if any(prefix in p for prefix in ["http:", "https:", "file:"]) or os.path.isabs(p):
+        # If the path is already absolute (local or URL), keep it as-is
+        if _is_url_path(p) or os.path.isabs(p):
             normalized.append(p)
         else:
-            normalized.append(os.path.normpath(os.path.join(base_folder, p)))
+            normalized.append(_join_paths(base_folder, p))
     return normalized
 
 
@@ -102,7 +133,8 @@ def _record_to_conversation(record: Dict[str, Any], image_folder: Optional[str])
     if not messages and not llava_conversations:
         return None
 
-    # Build images/videos list from several possible fields
+    # Build images list from several possible fields
+    # Note: videos are intentionally skipped as Qwen VL models don't support video yet
     images: List[Any] = []
     if "images" in record and isinstance(record["images"], list):
         images = record["images"]
@@ -112,9 +144,9 @@ def _record_to_conversation(record: Dict[str, Any], image_folder: Optional[str])
             images = record["image"]
         else:
             images = [record["image"]]
-    videos: List[Any] = record.get("videos", []) or []
     images = _normalize_paths(images, image_folder) or []
-    videos = _normalize_paths(videos, image_folder) or []
+    # Skip video processing - Qwen VL doesn't support video
+    videos: List[Any] = []
 
     conversation: List[Dict[str, Any]] = []
     source_msgs = messages if messages is not None else llava_conversations
@@ -128,11 +160,12 @@ def _record_to_conversation(record: Dict[str, Any], image_folder: Optional[str])
         else:
             content_str = msg.get("content", "")
 
-        content_list = _split_text_by_placeholders(content_str, images, videos)
+        content_list = _split_text_by_placeholders(content_str, images, videos, skip_video=True)
         if content_list:
             # Reorder to media-first followed by a single combined text segment to
             # match typical VLM chat templates (media before text)
-            media_parts = [p for p in content_list if p.get("type") in ("image", "video")]
+            # Note: Only include images, skip video as Qwen VL doesn't support it
+            media_parts = [p for p in content_list if p.get("type") == "image"]
             text_parts = [p.get("text", "") for p in content_list if p.get("type") == "text" and p.get("text")]
             if text_parts:
                 media_parts.append({"type": "text", "text": "".join(text_parts)})

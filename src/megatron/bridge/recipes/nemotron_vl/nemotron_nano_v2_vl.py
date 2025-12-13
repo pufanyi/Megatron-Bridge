@@ -20,6 +20,7 @@ import torch
 from megatron.bridge import AutoBridge
 from megatron.bridge.data.vlm_datasets import (
     HFDatasetConversationProvider,
+    SensetimeDatasetProvider,
 )
 from megatron.bridge.data.vlm_datasets.mock_provider import MockVLMConversationProvider
 from megatron.bridge.peft.lora import VLMLoRA
@@ -118,8 +119,17 @@ def nemotron_nano_v2_vl_12b_pretrain_config(
             pin_memory=True,
             persistent_workers=False,
         )
+    elif _dataset_choice == "sensetime":
+        dataset_cfg = SensetimeDatasetProvider(
+            sequence_length=seq_length,
+            hf_processor_path=hf_model_path,
+            num_workers=2,
+            dataloader_type="single",
+        )
     else:
-        raise ValueError(f"Unknown dataset_type '{_dataset_choice}'. Expected one of: 'mock', 'hf', 'preloaded'.")
+        raise ValueError(
+            f"Unknown dataset_type '{_dataset_choice}'. Expected one of: 'mock', 'hf', 'preloaded', 'sensetime'."
+        )
 
     # Config Container
     cfg = ConfigContainer(

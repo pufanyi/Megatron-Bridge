@@ -135,7 +135,7 @@ def parse_cli_args() -> Tuple[argparse.Namespace, list[str]]:
     parser.add_argument(
         "--dataset-type",
         type=str,
-        choices=["mock", "preloaded", "hf"],
+        choices=["mock", "preloaded", "hf", "sensetime"],
         default=None,
         help=(
             "Dataset type to use: 'mock', 'preloaded', or 'hf'. "

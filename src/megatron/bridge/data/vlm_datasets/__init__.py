@@ -21,12 +21,14 @@ Public API re-exports:
 - Collate fns: model-specific batch builders
 """
 
+from megatron.bridge.data.vlm_datasets.aoss.storage_clients import AOSSConfig, AOSSPatternRule
 from megatron.bridge.data.vlm_datasets.collate import (
     COLLATE_FNS,
     default_collate_fn,
     nemotron_nano_v2_vl_collate_fn,
     phi4_mm_collate_fn,
     qwen2_5_collate_fn,
+    set_aoss_client,
 )
 from megatron.bridge.data.vlm_datasets.conversation_dataset import VLMConversationDataset
 from megatron.bridge.data.vlm_datasets.hf_dataset_makers import (
@@ -40,6 +42,7 @@ from megatron.bridge.data.vlm_datasets.hf_dataset_makers import (
 from megatron.bridge.data.vlm_datasets.hf_provider import HFDatasetConversationProvider
 from megatron.bridge.data.vlm_datasets.mock_provider import MockVLMConversationProvider
 from megatron.bridge.data.vlm_datasets.preloaded_provider import PreloadedVLMConversationProvider
+from megatron.bridge.data.vlm_datasets.sensetime_provider import SensetimeDatasetProvider
 
 
 __all__ = [
@@ -55,6 +58,11 @@ __all__ = [
     "HFDatasetConversationProvider",
     "PreloadedVLMConversationProvider",
     "MockVLMConversationProvider",
+    "SensetimeDatasetProvider",
+    # AOSS configuration
+    "AOSSConfig",
+    "AOSSPatternRule",
+    "set_aoss_client",
     # Collation utilities
     "COLLATE_FNS",
     "default_collate_fn",

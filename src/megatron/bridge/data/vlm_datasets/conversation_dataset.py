@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import torch
 
-from megatron.bridge.data.vlm_datasets.collate import COLLATE_FNS
+from megatron.bridge.data.vlm_datasets.collate import COLLATE_FNS, set_aoss_client
 
 
 class VLMConversationDataset(torch.utils.data.Dataset):
@@ -41,11 +41,18 @@ class VLMConversationDataset(torch.utils.data.Dataset):
         target_length: int,
         processor: Any,
         collate_impl: Optional[Callable[[list, Any], Dict[str, torch.Tensor]]] = None,
+        aoss_client: Optional[Any] = None,
     ) -> None:
         assert isinstance(base_examples, list) and len(base_examples) > 0, "base_examples must be a non-empty list"
         self._base_examples = base_examples
         self._length = int(max(0, target_length))
         self._processor = processor
+        self._aoss_client = aoss_client
+
+        # Set the AOSS client for use in collate functions
+        if aoss_client is not None:
+            set_aoss_client(aoss_client)
+
         # Choose collate implementation by processor type name when not provided
         collate_key = type(processor).__name__ if processor is not None else "default"
         selected_impl = collate_impl or COLLATE_FNS.get(collate_key, COLLATE_FNS["default"])  # type: ignore[index]

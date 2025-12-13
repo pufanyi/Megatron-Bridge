@@ -16,38 +16,58 @@
 Collation utilities for building VLM training batches from conversation examples.
 """
 
-import warnings
+import base64
 import io
 import os
-
+import warnings
+import mimetypes
 import torch
 import torch.nn.functional as F
 from PIL import Image  # noqa: F401  # may be used downstream by processors
 
 from megatron.bridge.data.datasets.utils import IGNORE_INDEX
+from megatron.bridge.data.vlm_datasets.aoss.storage_clients import PatternAOSSClient
 from megatron.bridge.data.vlm_datasets.token_utils import extract_skipped_token_ids
 from megatron.bridge.training.utils.visual_inputs import Qwen2_5_VLVisualInputs
-from megatron.bridge.data.vlm_datasets.aoss.storage_clients import PatternAOSSClient
 
-# Initialize AOSS Client (singleton-like or global instance for the worker)
-# Note: You might need to configure this with actual config paths or rules
-# This is a basic setup assuming default config or environment variables work.
-# Adjust pattern_rules as needed for your specific aoss paths.
+
+# Global AOSS client instance - can be set via set_aoss_client() or auto-initialized
 _AOSS_CLIENT = None
+_AOSS_CLIENT_INITIALIZED = False
+
+
+def set_aoss_client(client) -> None:
+    """Set the global AOSS client for use in collate functions.
+
+    This should be called before any collate functions are invoked,
+    typically when building the dataset.
+
+    Args:
+        client: A PatternAOSSClient instance or compatible object with a get() method.
+    """
+    global _AOSS_CLIENT, _AOSS_CLIENT_INITIALIZED
+    _AOSS_CLIENT = client
+    _AOSS_CLIENT_INITIALIZED = True
+
 
 def _get_aoss_client():
-    global _AOSS_CLIENT
-    if _AOSS_CLIENT is None:
+    """Get the AOSS client, initializing from environment if not already set."""
+    global _AOSS_CLIENT, _AOSS_CLIENT_INITIALIZED
+    if not _AOSS_CLIENT_INITIALIZED:
         try:
-            # Example configuration - replace with actual config paths if needed
-            _AOSS_CLIENT = PatternAOSSClient(
-                default_conf_path=os.getenv("AOSS_DEFAULT_CONF", None),
-                pattern_rules=[] # Add specific rules if needed, e.g. [(r"^aoss://my-container", "/path/to/conf")]
-            )
+            # Fall back to environment variable configuration
+            default_conf = os.getenv("AOSS_DEFAULT_CONF", None)
+            if default_conf:
+                _AOSS_CLIENT = PatternAOSSClient(
+                    default_conf_path=default_conf,
+                    pattern_rules=[],
+                )
+            _AOSS_CLIENT_INITIALIZED = True
         except ImportError:
-            # Fallback or handle if AOSS SDK is missing but this code path is hit
             warnings.warn("PatternAOSSClient could not be initialized. AOSS downloads will fail.")
+            _AOSS_CLIENT_INITIALIZED = True  # Mark as initialized to avoid repeated attempts
     return _AOSS_CLIENT
+
 
 def _resolve_aoss_image(image_path_or_obj):
     """
@@ -58,20 +78,28 @@ def _resolve_aoss_image(image_path_or_obj):
         return image_path_or_obj
 
     # Check for aoss/OSS prefixes
-    if image_path_or_obj.startswith("s3://") or image_path_or_obj.startswith("oss://") or image_path_or_obj.startswith("aoss://"): # Adjust prefixes as needed
+    if (
+        image_path_or_obj.startswith("s3://")
+        or image_path_or_obj.startswith("oss://")
+        or image_path_or_obj.startswith("aoss://")
+    ):  # Adjust prefixes as needed
         client = _get_aoss_client()
         if client:
             try:
-                # Assuming 'get' returns bytes. Adjust based on actual AOSSClient API.
-                # The provided storage_clients.py wrapper has a 'get' method.
                 image_bytes = client.get(image_path_or_obj)
-                if image_bytes:
-                    return Image.open(io.BytesIO(image_bytes))
+                # mime, _ = mimetypes.guess_type(image_path_or_obj)
+                if image_path_or_obj.endswith(".jpg") or image_path_or_obj.endswith(".jpeg"):
+                    mime = "image/jpeg"
+                elif image_path_or_obj.endswith(".png"):
+                    mime = "image/png"
+                else:
+                    mime = mimetypes.guess_type(image_path_or_obj)
+                base64_image_url = f"data:{mime};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
+                return base64_image_url
             except Exception as e:
                 warnings.warn(f"Failed to download image from {image_path_or_obj}: {e}")
                 # You might want to return None or raise, depending on desired behavior
                 return None
-    
     return image_path_or_obj
 
 
@@ -206,7 +234,7 @@ def qwen2_5_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
     """Collate function for Qwen2.5 VL model."""
     if not HAVE_QWEN_VL_UTILS:
         raise ImportError(MISSING_QWEN_VL_UTILS_MSG)
-
+    
     skipped_tokens = extract_skipped_token_ids(processor)
 
     texts = [processor.apply_chat_template(example["conversation"], tokenize=False) for example in examples]
@@ -331,6 +359,7 @@ def qwen2_5_collate_fn(examples: list, processor) -> dict[str, torch.Tensor]:
     if "image_grid_thw" in batch:
         del batch["image_grid_thw"]
     batch["visual_inputs"] = visual_inputs
+    print(batch.keys)
     return batch
 
 

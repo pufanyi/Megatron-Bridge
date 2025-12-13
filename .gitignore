@@ -188,3 +188,4 @@ slurm*.out
 checkpoints/
 outputs/
 aoss/
+sensenovasi/
